@@ -7,7 +7,8 @@ This walkthrough summarizes the work done to provide a comprehensive explanation
 ### 1. Detailed Integration Guide
 I've created a comprehensive set of documentation, including:
 *   [k8s_cicd_guide.md](file:///home/sylaw/DevOps/k8s_cicd_guide.md): Focuses on the CI/CD workflow, cloud integrations, and best practices.
-*   [k8s_internals.md](file:///home/sylaw/DevOps/k8s_internals.md): A new technical deep-dive into Pod architecture, Linux namespaces, and K8s-to-runtime communication.
+*   [k8s_internals.md](file:///home/sylaw/DevOps/k8s_internals.md): Technical deep-dive into Pod architecture and K8s-to-runtime communication.
+*   [devops_qa.md](file:///home/sylaw/DevOps/devops_qa.md): A collection of common questions and detailed answers from our session.
 *   The breakdown of CI and CD phases in a Kubernetes context.
 *   A comparison between **Push-based** and **Pull-based (GitOps)** models.
 *   Best practices for secure and reliable deployments.

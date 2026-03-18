@@ -1,0 +1,30 @@
+# Task: Kubernetes CI/CD Guide & Internals
+
+- [x] Initial Research & Planning
+    - [x] Research CI/CD for K8s
+    - [x] Identify key components (Registry, YAML, Rollout)
+    - [x] Create implementation plan
+- [x] Core Guide Creation
+    - [x] Create initial k8s_cicd_guide.md
+    - [x] Document CI Phase
+    - [x] Document CD Phase
+- [x] Advanced Topics
+    - [x] Document Multi-Cloud (AWS, GCP, Azure)
+    - [x] Explain Registry necessity
+    - [x] Explain Push vs Pull (GitOps)
+- [x] Practical Examples
+    - [x] Create github_actions_k8s.yaml
+    - [x] Create sample_app.Dockerfile
+- [x] Reliability & Observability
+    - [x] Document Readiness/Liveness Probes
+    - [x] Create standard_k8s_probes.yaml
+    - [x] Create legacy_k8s_probes.yaml
+    - [x] Create github_actions_notifications.yaml
+- [x] Deep Dives & Theory
+    - [x] Clarify DevOps Philosophy vs. Tools
+    - [x] Document Self-Managed K8s Options
+    - [x] Create k8s_internals.md (Pod architecture, namespaces)
+    - [x] Create devops_qa.md (Technal Q&A session)
+- [x] Final Documentation & Push
+    - [x] Sync all files to /home/sylaw/DevOps/
+    - [x] Push to GitHub repository
