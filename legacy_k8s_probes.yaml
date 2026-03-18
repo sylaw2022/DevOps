@@ -1,0 +1,73 @@
+# Example: Kubernetes Health Checks for Legacy Applications
+
+---
+# Pattern 1: Using Exec Probes (Internal Checks)
+# Use this when the app has no HTTP interface but you can check a process or file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-app-exec
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: legacy-exec
+  template:
+    metadata:
+      labels:
+        app: legacy-exec
+    spec:
+      containers:
+      - name: legacy-container
+        image: my-legacy-app:v1
+        # Liveness: Checks if the main process (PID 1) is still alive
+        livenessProbe:
+          exec:
+            command: ["kill", "-0", "1"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        # Readiness: Checks if the app has finished starting by looking for a log/pid file
+        readinessProbe:
+          exec:
+            command: ["ls", "/var/run/myapp.pid"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Pattern 2: Using the Sidecar Pattern (External Proxy)
+# Use this when the legacy app is too "fragile" to probe directly or needs a custom check.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-app-sidecar
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: legacy-sidecar
+  template:
+    metadata:
+      labels:
+        app: legacy-sidecar
+    spec:
+      containers:
+      # The Main Legacy App
+      - name: legacy-app
+        image: my-legacy-app:v1
+        ports:
+        - containerPort: 7070 # Legacy port with no health endpoint
+
+      # The Sidecar (Health Proxy)
+      - name: health-sidecar
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+        # Kubernetes probes the SIDECAR, which is configured to check the legacy app
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080

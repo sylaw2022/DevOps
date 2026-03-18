@@ -1,0 +1,85 @@
+# Example: GitHub Actions Notifications
+# This shows how to trigger alerts ONLY on failure or state change.
+
+name: Deploy with Notifications
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ... (Regular Build/Deploy steps here) ...
+      
+      - name: Deploy to K8s
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl rollout status deployment/my-app
+
+      # --- NOTIFICATION STEPS ---
+      
+      # Option 1: Slack Notification (BROADCASTS to a Channel)
+      # Everyone in the channel receives this alert.
+      - name: Slack Notification
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: '#bd3232'
+          SLACK_MESSAGE: "❌ Deployment Failed for commit ${{ github.sha }}!"
+          SLACK_TITLE: "Deployment Alert"
+
+      # Option 2: Email Notification on Failure
+      - name: Send Email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "⚠️ CI/CD Pipeline Failed"
+          body: "The workflow for ${{ github.repository }} has failed. Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          to: developer@example.com
+          from: Github Actions CI
+
+      # Option 3: Microsoft Teams Notification (BROADCASTS to a Channel)
+      # Sends a message to a Teams Channel via Webhook.
+      - name: Microsoft Teams Notification
+        if: failure()
+        uses: jivanesp/ms-teams-notification@v1.1.0
+        with:
+          github-token: ${{ github.token }}
+          ms-teams-webhook-uri: ${{ secrets.TEAMS_WEBHOOK }}
+          notification-summary: "❌ Pipeline Failed: ${{ github.repository }}"
+          notification-color: "ff0000"
+          timezone: "UTC"
+
+      # Option 4: WhatsApp Notification (via Twilio)
+      - name: WhatsApp Notification
+        if: failure()
+        uses: twilio-labs/github-action@v1
+        with:
+          twil_sid: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          twil_token: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          from_number: "whatsapp:+14155238886" # Twilio Sandbox Number
+          to_number: "whatsapp:${{ secrets.MY_PHONE_NUMBER }}"
+          body: "⚠️ CI/CD Alert: The build for ${{ github.repository }} has FAILED."
+
+      # Option 5: Telegram Notification (BROADCASTS to a Group)
+      # To use this, add your bot to a group and use the Group ID as TELEGRAM_TO.
+      - name: Telegram Notification
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            ⚠️ Pipeline Failed!
+            Repo: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Link: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

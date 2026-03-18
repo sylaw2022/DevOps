@@ -1,0 +1,73 @@
+# Standard Kubernetes Probes Collection
+
+---
+# Pattern 1: HTTP GET Probes (The Modern Default)
+# Best for web applications and REST APIs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: standard-http-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: http-app
+  template:
+    metadata:
+      labels:
+        app: http-app
+    spec:
+      containers:
+      - name: app-container
+        image: my-app:v1
+        ports:
+        - containerPort: 8080
+        # Readiness: Tells K8s when to send traffic
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        # Liveness: Tells K8s when to restart the container
+        livenessProbe:
+          httpGet:
+            path: /live
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
+---
+# Pattern 2: TCP Socket Probes
+# Best for Databases (MySQL, Redis) or non-HTTP services.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tcp-check-example
+spec:
+  containers:
+  - name: redis
+    image: redis:alpine
+    # Checks if port 6379 is open/listening
+    readinessProbe:
+      tcpSocket:
+        port: 6379
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+---
+# Pattern 3: gRPC Health Probes
+# Best for modern gRPC-based microservices.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: grpc-check-example
+spec:
+  containers:
+  - name: grpc-service
+    image: my-grpc-app:v1
+    # Uses the standard gRPC health check protocol
+    livenessProbe:
+      grpc:
+        port: 9000
+      initialDelaySeconds: 10
