@@ -78,7 +78,224 @@ Kubernetes doesn't speak "Docker" natively. It uses the **CRI** standard to talk
 
 ---
 
-## 6. The Update Lifecycle: RollingUpdate
+## 6. The Pause Container — Deep Dive Q&A
+
+### Q: What exactly is the pause container?
+
+Every Pod starts with a tiny, invisible container called `pause` (also called the *infra container*). Its sole job is to **own and hold open the Linux kernel namespaces** (Network, IPC, UTS/hostname) that all other containers in the Pod share. If an app container crashes and restarts, the namespaces are preserved — the Pod's IP address never changes.
+
+```
+Pod
+├── pause  ← owns the Network/IPC/UTS namespaces
+├── app-container  ← joins those namespaces
+└── sidecar        ← joins those namespaces
+```
+
+### Q: Does the pause container need a Linux kernel or OS inside it?
+
+**No.** `FROM scratch` means no userspace OS (no `/bin`, `/lib`, no shell). But there is **always only one kernel** — the host's. Every container on the machine shares it. A container is just a regular Linux process with kernel-enforced restrictions:
+
+| Mechanism | What it does |
+|---|---|
+| **Namespaces** | Makes the process *see* an isolated view (network, PIDs, hostname) |
+| **Cgroups** | Limits *how much* CPU/RAM the process can use |
+| **seccomp** | Restricts *which* syscalls the process can make |
+
+```
+┌──────────────────────────────────────────────────┐
+│                  HOST MACHINE                     │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
+│  │  nginx   │  │  redis   │  │  pause   │  ← userspace processes │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘       │
+│  ─────┴──────────────┴──────────────┴──────────  │
+│           Linux Kernel (shared by ALL)            │
+└──────────────────────────────────────────────────┘
+```
+
+### Q: Who actually creates the namespaces? I don't see it in pause.c.
+
+**`runc`** creates them — not the pause process. Namespaces are created **before** pause even starts, via the `clone()` syscall with namespace flags. Pause merely *holds them alive* by staying as PID 1.
+
+```
+Kubelet → containerd → containerd-shim → runc
+                                           │
+                          ┌────────────────┴──────────────────┐
+                          │ 1. clone(CLONE_NEWNET              │ ← kernel creates
+                          │        | CLONE_NEWPID              │   namespaces HERE
+                          │        | CLONE_NEWIPC              │
+                          │        | CLONE_NEWUTS)             │
+                          └────────────────┬──────────────────┘
+                                           │
+                          ┌────────────────┴──────────────────┐
+                          │ 2. exec("/pause")                  │ ← pause starts INSIDE
+                          └───────────────────────────────────┘   already-created namespaces
+```
+
+When **app containers** start, `runc` uses `setns()` to *join* the existing namespaces — it does not create new ones:
+
+```c
+// runc does this for each app container:
+int fd = open("/proc/<pause-pid>/ns/net", O_RDONLY);
+setns(fd, CLONE_NEWNET);   // join the existing namespace
+```
+
+### Division of Labour
+
+| Who | Does What |
+|---|---|
+| **`runc`** | Creates namespaces via `clone()` syscall |
+| **`pause`** | Holds namespaces open by staying alive as PID 1 |
+| **`runc`** (app containers) | Joins namespaces via `setns()` syscall |
+| **CNI plugin** | Configures the network inside the network namespace |
+| **`pause.c`** | Reaps zombie processes + handles graceful shutdown |
+
+---
+
+### Q: How do I build a pause container from scratch?
+
+**1. Write `pause.c`** (see full source below).
+
+**2. Compile as a static binary:**
+```bash
+gcc -o pause pause.c -static -DVERSION=3.9
+```
+| Flag | Meaning |
+|---|---|
+| `-o pause` | Output binary named `pause` |
+| `-static` | Bake all libraries into the binary (required for `FROM scratch`) |
+| `-DVERSION=3.9` | Inject version string at compile time |
+
+Verify it has no shared library dependencies:
+```bash
+ldd pause
+# not a dynamic executable  ✓
+```
+
+**3. Write `Dockerfile`:**
+```dockerfile
+FROM scratch
+ADD pause /pause
+ENTRYPOINT ["/pause"]
+```
+`FROM scratch` is a completely empty base image — no OS, no shell, nothing. A static binary is the only thing that can run here.
+
+**4. Build the image:**
+```bash
+docker build -t my-pause:v1 .
+```
+| Part | Meaning |
+|---|---|
+| `-t my-pause:v1` | Tag: name `my-pause`, version `v1` |
+| `.` | Build context (current directory, where `pause` binary lives) |
+
+Result: a ~700 KB image containing **exactly one file**.
+
+**5. (Optional) Use musl for a smaller binary:**
+```bash
+musl-gcc -o pause pause.c -static
+# ~20 KB vs ~900 KB with glibc
+```
+
+**6. (Optional) Use a custom pause image in containerd:**
+
+Edit `/etc/containerd/config.toml`:
+```toml
+[plugins."io.containerd.grpc.v1.cri"]
+  sandbox_image = "my-pause:v1"
+```
+
+---
+
+### Full C Source (`pause.c`) — Official Kubernetes
+
+```c
+/*
+Copyright 2016 The Kubernetes Authors.
+Licensed under the Apache License, Version 2.0
+*/
+
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define STRINGIFY(x) #x
+#define VERSION_STRING(x) STRINGIFY(x)
+
+#ifndef VERSION
+#define VERSION HEAD
+#endif
+
+/* Called on SIGINT / SIGTERM — print signal name and exit cleanly */
+static void sigdown(int signo) {
+  psignal(signo, "Shutting down, got signal");
+  exit(0);
+}
+
+/*
+ * Called on SIGCHLD — reap all zombie children.
+ * pause is PID 1 inside the Pod's PID namespace, so orphaned
+ * child processes are re-parented to it. Without this reaper,
+ * dead children accumulate as zombies in the kernel process table.
+ * WNOHANG = don't block if no child is ready to be reaped.
+ */
+static void sigreap(int signo) {
+  while (waitpid(-1, NULL, WNOHANG) > 0)
+    ;
+}
+
+int main(int argc, char **argv) {
+  int i;
+
+  /* Support a -v flag to print version and exit */
+  for (i = 1; i < argc; ++i) {
+    if (!strcasecmp(argv[i], "-v")) {
+      printf("pause.c %s\n", VERSION_STRING(VERSION));
+      return 0;
+    }
+  }
+
+  /* Warn if not running as PID 1 (e.g. run manually on host) */
+  if (getpid() != 1)
+    fprintf(stderr, "Warning: pause should be the first process\n");
+
+  /* Register signal handlers */
+  if (sigaction(SIGINT,  &(struct sigaction){.sa_handler = sigdown}, NULL) < 0) return 1;
+  if (sigaction(SIGTERM, &(struct sigaction){.sa_handler = sigdown}, NULL) < 0) return 2;
+  if (sigaction(SIGCHLD, &(struct sigaction){.sa_handler = sigreap,
+                                             .sa_flags = SA_NOCLDSTOP},
+                NULL) < 0) return 3;
+
+  /*
+   * The entire purpose of this process: sleep forever.
+   * pause() syscall suspends until any signal is delivered.
+   * The signal handler runs, then we loop back and sleep again.
+   * CPU usage: effectively 0.
+   */
+  for (;;)
+    pause();
+
+  fprintf(stderr, "Error: infinite loop terminated\n");
+  return 42;
+}
+```
+
+#### Key Points
+
+| Element | Purpose |
+|---|---|
+| `sigdown` | Graceful exit on `SIGTERM`/`SIGINT` (how K8s stops a Pod) |
+| `sigreap` | Zombie reaper — critical because pause is PID 1 |
+| `SA_NOCLDSTOP` | Only trigger `SIGCHLD` on child *death*, not on stop/continue |
+| `pause()` syscall | Sleeps with zero CPU until a signal arrives |
+| **No `clone()`/`unshare()`** | Namespaces are created by `runc`, not by this code |
+
+---
+
+## 7. The Update Lifecycle: RollingUpdate
 
 ### A. Standard Flow (Zero Downtime)
 1.  **Create First:** New Pod (v2) is spawned.
